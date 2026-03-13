@@ -1,0 +1,14 @@
+anthropic.com
+cdn.prod.website-files.com
+claude.ai
+claudeusercontent.com
+cloudfront.net
+googleapis.com
+googletagmanager.com
+gstatic.com
+hubspotonwebflow.com
+intellimize.co
+intercom.io
+segment.com
+sentry.io
+youtube.com
