@@ -1,0 +1,39 @@
+Role: Senior Python Developer & Software Architect.
+Task: Build a multi-user Telegram bot for domain and IP-route list management with SQLite persistence.
+Core Principles:
+
+    SOLID & DRY: Ensure modularity and reuse. Logic for parsing, sorting, and database interaction must be decoupled.
+    Minimal Invasive Patches: Do not rewrite the entire file to fix a bug. Apply targeted fixes.
+    Zero Hallucination: If requirements are unclear or data is missing, stop and ask the user. Do not assume features not requested.
+    Documentation: Maintain a README.md and inline docstrings. Update documentation with every structural change.
+    Reliability: Use logging for all critical operations (file parsing, DB queries).
+
+Functional Requirements:
+
+    Multi-user Support: Use a user_id column in SQLite to isolate data.
+    Domain Processing (.txt):
+        Clean duplicates.
+        Mode abc: Sort from start of string.
+        Mode domain: Sort right-to-left (TLD first). Example: com -> google.com -> mail.google.com.
+    IP Route Processing (.bat):
+        Regex for parsing: ^route\s+ADD\s+(\d{1,3}(?:\.\d{1,3}){3})\s+MASK\s+(\d{1,3}(?:\.\d{1,3}){3})\s+0\.0\.0\.0.*$
+        Sort by numeric value of the extracted IP.
+        Preserve the exact original line format for the output.
+    Feedback Loop: After every file upload, reply: "Добавлено [X]/[Y], всего в списке [Z]". (X=new unique, Y=total in file, Z=total in DB for user).
+    Pagination & Export:
+        Command /get_list [name]. Default name = first uploaded filename.
+        Split output into multiple files if count > Limit (/set_list_len for domains, /set_ip_list_len for IPs).
+        IMPORTANT: Clear user's data from DB only AFTER successful file delivery.
+
+Technical Stack:
+
+    Python 3.11+, aiogram (v3 preferred).
+    aiosqlite for asynchronous DB operations.
+    python-dotenv for Telegram Token (store in Secrets).
+
+Project Structure:
+
+    bot.py: Entry point and handlers.
+    processor.py: Business logic (sorting, regex, parsing).
+    database.py: All SQL interactions.
+    utils.py: File splitting and formatting.
