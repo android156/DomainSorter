@@ -342,6 +342,12 @@ async def cb_sort(callback: CallbackQuery) -> None:
         await callback.answer("Неизвестный режим")
         return
 
+    current = await db.get_settings(user_id)
+    if current["sort_mode"] == mode:
+        label = "алфавитная (abc)" if mode == "abc" else "по домену (domain)"
+        await callback.answer(f"Уже выбрано: {label}")
+        return
+
     await db.update_setting(user_id, "sort_mode", mode)
 
     settings = await db.get_settings(user_id)
