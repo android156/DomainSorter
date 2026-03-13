@@ -234,8 +234,14 @@ async def cmd_get_list(message: Message) -> None:
             base_name = "domains"
 
         domains = await db.get_domains(user_id, settings["sort_mode"])
-        domain_files = utils.make_domain_files(domains, base_name, settings["list_len"])
 
+        all_fname, all_content = utils.make_all_file(domains, base_name, "txt")
+        await message.answer_document(
+            BufferedInputFile(all_content, filename=all_fname),
+            caption=f"📋 {all_fname}  ({len(domains)} доменов, полный список)",
+        )
+
+        domain_files = utils.make_domain_files(domains, base_name, settings["list_len"])
         for filename, content in domain_files:
             await message.answer_document(
                 BufferedInputFile(content, filename=filename),
@@ -253,8 +259,14 @@ async def cmd_get_list(message: Message) -> None:
             base_name = "routes"
 
         ip_routes = await db.get_ip_routes(user_id)
-        ip_files = utils.make_ip_files(ip_routes, base_name, settings["ip_list_len"])
 
+        all_fname, all_content = utils.make_all_file(ip_routes, base_name, "bat")
+        await message.answer_document(
+            BufferedInputFile(all_content, filename=all_fname),
+            caption=f"📋 {all_fname}  ({len(ip_routes)} маршрутов, полный список)",
+        )
+
+        ip_files = utils.make_ip_files(ip_routes, base_name, settings["ip_list_len"])
         for filename, content in ip_files:
             await message.answer_document(
                 BufferedInputFile(content, filename=filename),

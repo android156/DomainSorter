@@ -71,3 +71,21 @@ def make_ip_files(
         len(items), len(result), max_len,
     )
     return result
+
+
+def make_all_file(
+    items: list[str], base_name: str, ext: str
+) -> tuple[str, bytes]:
+    """
+    Build a single in-memory file containing every item.
+
+    Filename: <base_name>_all.<ext>
+
+    Returns
+    -------
+    (filename, utf-8 bytes)
+    """
+    filename = f"{base_name}_all.{ext}"
+    content = "\n".join(items) + "\n"
+    logger.info("make_all_file: %d item(s) → %s", len(items), filename)
+    return filename, content.encode("utf-8")
