@@ -336,6 +336,8 @@ async def handle_document(message: Message) -> None:
 async def main() -> None:
     await db.init_db()
     logger.info("Bot starting …")
+    # Drop any existing webhook / conflicting sessions before polling
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 
