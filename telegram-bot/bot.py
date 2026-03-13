@@ -25,12 +25,27 @@ from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import BufferedInputFile, Document, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    Document,
+    Message,
+)
 from dotenv import load_dotenv
 
 import database as db
 import processor
 import utils
+from keyboards import (
+    BTN_EXPORT,
+    BTN_HELP,
+    BTN_SORT_ABC,
+    BTN_SORT_DOMAIN,
+    BTN_STATUS,
+    after_upload_inline,
+    main_keyboard,
+    status_inline,
+)
 
 load_dotenv()
 
@@ -70,43 +85,23 @@ HELP_TEXT = (
     "<b>Размер пачки:</b>\n"
     "• /set_list_len <i>N</i> — макс. доменов в файле (по умолч. 300)\n"
     "• /set_ip_list_len <i>N</i> — макс. IP-маршрутов в файле (по умолч. 1000)\n\n"
-    "<b>Статус:</b>\n"
-    "• /status — размеры списков и текущие настройки\n"
+    "<b>Также доступны кнопки внизу клавиатуры.</b>\n"
 )
 
 
 # ---------------------------------------------------------------------------
-# Handlers
+# Shared helpers
 # ---------------------------------------------------------------------------
 
 
-@dp.message(CommandStart())
-async def cmd_start(message: Message) -> None:
-    """Welcome message."""
-    await message.answer(
-        f"Привет! Отправляй мне файлы — я отсортирую и дедуплицирую списки.\n\n{HELP_TEXT}",
-        parse_mode="HTML",
-    )
-
-
-@dp.message(Command("help"))
-async def cmd_help(message: Message) -> None:
-    await message.answer(HELP_TEXT, parse_mode="HTML")
-
-
-@dp.message(Command("status"))
-async def cmd_status(message: Message) -> None:
-    """Show current list sizes and user settings."""
-    user_id = message.from_user.id
-    settings = await db.get_settings(user_id)
-    domain_count = await db.count_domains(user_id)
-    ip_count = await db.count_ip_routes(user_id)
-
+def _build_status_text(
+    domain_count: int, ip_count: int, settings: dict
+) -> str:
     mode_label = (
         "алфавитная (abc)" if settings["sort_mode"] == "abc"
         else "по домену (domain)"
     )
-    text = (
+    return (
         f"📊 <b>Состояние:</b>\n\n"
         f"🔤 Доменов в списке: <b>{domain_count}</b>\n"
         f"🌐 IP-маршрутов в списке: <b>{ip_count}</b>\n\n"
@@ -117,101 +112,10 @@ async def cmd_status(message: Message) -> None:
         f"  Первый файл доменов: <b>{settings['first_domain_filename'] or '—'}</b>\n"
         f"  Первый файл IP: <b>{settings['first_ip_filename'] or '—'}</b>"
     )
-    await message.answer(text, parse_mode="HTML")
 
 
-@dp.message(Command("set_sort"))
-async def cmd_set_sort(message: Message) -> None:
-    """
-    Change domain sort mode.
-    Usage: /set_sort abc  |  /set_sort domain
-    """
-    user_id = message.from_user.id
-    parts = message.text.split(maxsplit=1)
-
-    if len(parts) < 2 or parts[1].strip().lower() not in ("abc", "domain"):
-        await message.answer(
-            "Использование: /set_sort abc или /set_sort domain\n\n"
-            "• <b>abc</b> — алфавитная сортировка с начала строки\n"
-            "• <b>domain</b> — сортировка по TLD: com → google.com → mail.google.com",
-            parse_mode="HTML",
-        )
-        return
-
-    mode = parts[1].strip().lower()
-    await db.update_setting(user_id, "sort_mode", mode)
-    label = "алфавитная (abc)" if mode == "abc" else "по домену (domain)"
-    await message.answer(
-        f"✅ Режим сортировки изменён: <b>{label}</b>",
-        parse_mode="HTML",
-    )
-
-
-@dp.message(Command("set_list_len"))
-async def cmd_set_list_len(message: Message) -> None:
-    """
-    Set max domain records per output file.
-    Usage: /set_list_len 100
-    """
-    user_id = message.from_user.id
-    parts = message.text.split(maxsplit=1)
-
-    if len(parts) < 2:
-        await message.answer("Использование: /set_list_len <число>\nПример: /set_list_len 100")
-        return
-
-    try:
-        length = int(parts[1].strip())
-        if length < 1:
-            raise ValueError
-    except ValueError:
-        await message.answer("❌ Укажите целое положительное число. Пример: /set_list_len 100")
-        return
-
-    await db.update_setting(user_id, "list_len", length)
-    await message.answer(
-        f"✅ Макс. доменов в файле: <b>{length}</b>", parse_mode="HTML"
-    )
-
-
-@dp.message(Command("set_ip_list_len"))
-async def cmd_set_ip_list_len(message: Message) -> None:
-    """
-    Set max IP route records per output file.
-    Usage: /set_ip_list_len 500
-    """
-    user_id = message.from_user.id
-    parts = message.text.split(maxsplit=1)
-
-    if len(parts) < 2:
-        await message.answer("Использование: /set_ip_list_len <число>\nПример: /set_ip_list_len 500")
-        return
-
-    try:
-        length = int(parts[1].strip())
-        if length < 1:
-            raise ValueError
-    except ValueError:
-        await message.answer("❌ Укажите целое положительное число. Пример: /set_ip_list_len 500")
-        return
-
-    await db.update_setting(user_id, "ip_list_len", length)
-    await message.answer(
-        f"✅ Макс. IP-маршрутов в файле: <b>{length}</b>", parse_mode="HTML"
-    )
-
-
-@dp.message(Command("get_list"))
-async def cmd_get_list(message: Message) -> None:
-    """
-    Export current lists and clear data after successful delivery.
-    Usage: /get_list [output_name]
-    """
-    user_id = message.from_user.id
+async def _do_export(user_id: int, message: Message, custom_name: str | None = None) -> None:
     settings = await db.get_settings(user_id)
-    parts = message.text.split(maxsplit=1)
-    custom_name: str | None = parts[1].strip() if len(parts) > 1 else None
-
     domain_count = await db.count_domains(user_id)
     ip_count = await db.count_ip_routes(user_id)
 
@@ -224,7 +128,6 @@ async def cmd_get_list(message: Message) -> None:
     sent_domains = False
     sent_ips = False
 
-    # ── Export domains ────────────────────────────────────────────────────────
     if domain_count > 0:
         if custom_name:
             base_name = custom_name
@@ -249,7 +152,6 @@ async def cmd_get_list(message: Message) -> None:
             )
         sent_domains = True
 
-    # ── Export IP routes ──────────────────────────────────────────────────────
     if ip_count > 0:
         if custom_name:
             base_name = custom_name
@@ -274,7 +176,6 @@ async def cmd_get_list(message: Message) -> None:
             )
         sent_ips = True
 
-    # ── Clear data after successful delivery ──────────────────────────────────
     if sent_domains:
         await db.clear_domains(user_id)
     if sent_ips:
@@ -284,13 +185,207 @@ async def cmd_get_list(message: Message) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Command handlers
+# ---------------------------------------------------------------------------
+
+
+@dp.message(CommandStart())
+async def cmd_start(message: Message) -> None:
+    await message.answer(
+        f"Привет! Отправляй мне файлы — я отсортирую и дедуплицирую списки.\n\n{HELP_TEXT}",
+        parse_mode="HTML",
+        reply_markup=main_keyboard(),
+    )
+
+
+@dp.message(Command("help"))
+async def cmd_help(message: Message) -> None:
+    await message.answer(HELP_TEXT, parse_mode="HTML", reply_markup=main_keyboard())
+
+
+@dp.message(Command("status"))
+async def cmd_status(message: Message) -> None:
+    user_id = message.from_user.id
+    settings = await db.get_settings(user_id)
+    domain_count = await db.count_domains(user_id)
+    ip_count = await db.count_ip_routes(user_id)
+    text = _build_status_text(domain_count, ip_count, settings)
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=status_inline(settings["sort_mode"]),
+    )
+
+
+@dp.message(Command("set_sort"))
+async def cmd_set_sort(message: Message) -> None:
+    user_id = message.from_user.id
+    parts = message.text.split(maxsplit=1)
+
+    if len(parts) < 2 or parts[1].strip().lower() not in ("abc", "domain"):
+        await message.answer(
+            "Использование: /set_sort abc или /set_sort domain\n\n"
+            "• <b>abc</b> — алфавитная сортировка с начала строки\n"
+            "• <b>domain</b> — сортировка по TLD: com → google.com → mail.google.com",
+            parse_mode="HTML",
+        )
+        return
+
+    mode = parts[1].strip().lower()
+    await db.update_setting(user_id, "sort_mode", mode)
+    label = "алфавитная (abc)" if mode == "abc" else "по домену (domain)"
+    await message.answer(
+        f"✅ Режим сортировки изменён: <b>{label}</b>",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("set_list_len"))
+async def cmd_set_list_len(message: Message) -> None:
+    user_id = message.from_user.id
+    parts = message.text.split(maxsplit=1)
+
+    if len(parts) < 2:
+        await message.answer("Использование: /set_list_len <число>\nПример: /set_list_len 100")
+        return
+
+    try:
+        length = int(parts[1].strip())
+        if length < 1:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Укажите целое положительное число. Пример: /set_list_len 100")
+        return
+
+    await db.update_setting(user_id, "list_len", length)
+    await message.answer(
+        f"✅ Макс. доменов в файле: <b>{length}</b>", parse_mode="HTML"
+    )
+
+
+@dp.message(Command("set_ip_list_len"))
+async def cmd_set_ip_list_len(message: Message) -> None:
+    user_id = message.from_user.id
+    parts = message.text.split(maxsplit=1)
+
+    if len(parts) < 2:
+        await message.answer("Использование: /set_ip_list_len <число>\nПример: /set_ip_list_len 500")
+        return
+
+    try:
+        length = int(parts[1].strip())
+        if length < 1:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Укажите целое положительное число. Пример: /set_ip_list_len 500")
+        return
+
+    await db.update_setting(user_id, "ip_list_len", length)
+    await message.answer(
+        f"✅ Макс. IP-маршрутов в файле: <b>{length}</b>", parse_mode="HTML"
+    )
+
+
+@dp.message(Command("get_list"))
+async def cmd_get_list(message: Message) -> None:
+    user_id = message.from_user.id
+    parts = message.text.split(maxsplit=1)
+    custom_name: str | None = parts[1].strip() if len(parts) > 1 else None
+    await _do_export(user_id, message, custom_name)
+
+
+# ---------------------------------------------------------------------------
+# Reply-keyboard text handlers (must be AFTER command handlers)
+# ---------------------------------------------------------------------------
+
+
+@dp.message(F.text == BTN_STATUS)
+async def btn_status(message: Message) -> None:
+    await cmd_status(message)
+
+
+@dp.message(F.text == BTN_EXPORT)
+async def btn_export(message: Message) -> None:
+    await _do_export(message.from_user.id, message)
+
+
+@dp.message(F.text == BTN_HELP)
+async def btn_help(message: Message) -> None:
+    await cmd_help(message)
+
+
+@dp.message(F.text == BTN_SORT_ABC)
+async def btn_sort_abc(message: Message) -> None:
+    user_id = message.from_user.id
+    await db.update_setting(user_id, "sort_mode", "abc")
+    await message.answer("✅ Сортировка: <b>алфавитная (abc)</b>", parse_mode="HTML")
+
+
+@dp.message(F.text == BTN_SORT_DOMAIN)
+async def btn_sort_domain(message: Message) -> None:
+    user_id = message.from_user.id
+    await db.update_setting(user_id, "sort_mode", "domain")
+    await message.answer("✅ Сортировка: <b>по домену (domain)</b>", parse_mode="HTML")
+
+
+# ---------------------------------------------------------------------------
+# Inline callback handlers
+# ---------------------------------------------------------------------------
+
+
+@dp.callback_query(F.data.startswith("sort:"))
+async def cb_sort(callback: CallbackQuery) -> None:
+    user_id = callback.from_user.id
+    mode = callback.data.split(":")[1]
+
+    if mode not in ("abc", "domain"):
+        await callback.answer("Неизвестный режим")
+        return
+
+    await db.update_setting(user_id, "sort_mode", mode)
+
+    settings = await db.get_settings(user_id)
+    domain_count = await db.count_domains(user_id)
+    ip_count = await db.count_ip_routes(user_id)
+    text = _build_status_text(domain_count, ip_count, settings)
+
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=status_inline(mode),
+    )
+    label = "алфавитная (abc)" if mode == "abc" else "по домену (domain)"
+    await callback.answer(f"Сортировка: {label}")
+
+
+@dp.callback_query(F.data == "get_list")
+async def cb_get_list(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await _do_export(callback.from_user.id, callback.message)
+
+
+@dp.callback_query(F.data == "show_status")
+async def cb_show_status(callback: CallbackQuery) -> None:
+    user_id = callback.from_user.id
+    settings = await db.get_settings(user_id)
+    domain_count = await db.count_domains(user_id)
+    ip_count = await db.count_ip_routes(user_id)
+    text = _build_status_text(domain_count, ip_count, settings)
+    await callback.message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=status_inline(settings["sort_mode"]),
+    )
+    await callback.answer()
+
+
+# ---------------------------------------------------------------------------
 # Document handler
 # ---------------------------------------------------------------------------
 
 
 @dp.message(F.document)
 async def handle_document(message: Message) -> None:
-    """Handle uploaded .txt (domains) and .bat (IP routes) files."""
     user_id = message.from_user.id
     document: Document = message.document
     filename: str = document.file_name or "unknown"
@@ -304,7 +399,6 @@ async def handle_document(message: Message) -> None:
         )
         return
 
-    # Download
     file_info = await bot.get_file(document.file_id)
     raw = await bot.download_file(file_info.file_path)
     content = raw.read().decode("utf-8", errors="replace")
@@ -319,7 +413,8 @@ async def handle_document(message: Message) -> None:
             user_id, domains, filename
         )
         await message.answer(
-            f"✅ Добавлено {new_count}/{total_in_file}, всего в списке {total_in_db}"
+            f"✅ Добавлено {new_count}/{total_in_file}, всего в списке {total_in_db}",
+            reply_markup=after_upload_inline(),
         )
 
     elif ext == ".bat":
@@ -336,7 +431,8 @@ async def handle_document(message: Message) -> None:
             user_id, routes, filename
         )
         await message.answer(
-            f"✅ Добавлено {new_count}/{total_in_file}, всего в списке {total_in_db}"
+            f"✅ Добавлено {new_count}/{total_in_file}, всего в списке {total_in_db}",
+            reply_markup=after_upload_inline(),
         )
 
 
@@ -348,7 +444,6 @@ async def handle_document(message: Message) -> None:
 async def main() -> None:
     await db.init_db()
     logger.info("Bot starting …")
-    # Drop any existing webhook / conflicting sessions before polling
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
