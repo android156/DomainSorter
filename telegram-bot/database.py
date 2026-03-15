@@ -3,12 +3,16 @@ database.py — All SQL interactions via aiosqlite.
 Isolates each user's data by user_id.
 """
 
-import aiosqlite
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
-DB_PATH = Path(__file__).parent / "bot_data.db"
+import aiosqlite
+
+DB_PATH = Path(
+    os.getenv("DOMAIN_SORTER_DB_PATH", str(Path(__file__).parent / "bot_data.db"))
+)
 
 logger = logging.getLogger(__name__)
 

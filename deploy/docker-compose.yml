@@ -1,0 +1,15 @@
+services:
+  domainsorter-bot:
+    build:
+      context: ..
+      dockerfile: telegram-bot/Dockerfile
+    container_name: domainsorter-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DOMAIN_SORTER_DB_PATH=/data/bot_data.db
+    volumes:
+      - ./data:/data
+    working_dir: /app
+    command: ["python", "bot.py"]
